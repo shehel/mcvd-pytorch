@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.distributions.gamma import Gamma
 
 from . import get_sigmas
+import pdb
 
 __all__ = ['UNet_SMLD', 'UNet_DDPM']
 
@@ -205,6 +206,7 @@ class UNet(nn.Module):
 
         # DOWN
         self.downblocks = nn.ModuleList()
+        pdb.set_trace()
         self.downblocks.append(nn.Conv2d(n_channels*(num_frames + num_frames_cond), ch, kernel_size=3, padding=1, stride=1))
         prev_ch = ch_mult[0]
         ch_size = [ch]

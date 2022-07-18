@@ -32,6 +32,8 @@ from torchvision.utils import make_grid, save_image
 
 import models.eval_models as eval_models
 
+from datasets.t4c import train_collate_fn
+
 from datasets import get_dataset, data_transform, inverse_data_transform
 from datasets.ffhq_tfrecords import FFHQ_TFRecordsDataLoader
 from evaluation.fid_PR import get_fid, get_fid_PR, get_stats_path, get_feats_path
@@ -49,6 +51,8 @@ from models.fvd.fvd import get_fvd_feats, frechet_distance, load_i3d_pretrained
 from models.unet import UNet_SMLD, UNet_DDPM
 #import pdb; pdb.set_trace()
 
+import pdb
+import matplotlib.animation as animation
 __all__ = ['NCSNRunner']
 
 
@@ -100,8 +104,23 @@ class RunningAverageMeter(object):
             if step is not None:
                 self.steps.append(step)
 
+def viz(all_videos_list, name):
+    for x in range(1):
+        #all_images = (all_videos_list[x] + 1) * 0.5
+        all_images = all_videos_list.cpu().detach().numpy()
+        fig, ax = plt.subplots(figsize=(8, 8))
+        imgs = []
+        for img in all_images[:, :,:]:
 
-def conditioning_fn(config, X, num_frames_pred=0, prob_mask_cond=0.0, prob_mask_future=0.0, conditional=True):
+            img = ax.imshow(img, animated=True)
+            imgs.append([img])
+
+        ani = animation.ArtistAnimation(fig, imgs, interval=200, blit=True, repeat_delay=100)
+        #if file is not None:
+        ani.save(str(f'sample-{name}-{x}.gif'))
+
+
+def conditioning_fn(config, X, num_frames_pred=0, prob_mask_cond=0.0, prob_mask_future=0.0, conditional=True, flag=False):
     imsize = config.data.image_size
     if not conditional:
         return X.reshape(len(X), -1, imsize, imsize), None, None
@@ -148,6 +167,7 @@ def conditioning_fn(config, X, num_frames_pred=0, prob_mask_cond=0.0, prob_mask_
 
 
 def stretch_image(X, ch, imsize):
+    ch = ch-7
     return X.reshape(len(X), -1, ch, imsize, imsize).permute(0, 2, 1, 4, 3).reshape(len(X), ch, -1, imsize).permute(0, 1, 3, 2)
 
 
@@ -184,6 +204,7 @@ def get_model(config):
     depth = getattr(config.model, 'depth', 'deep')
 
     if arch == 'unetmore':
+
         from models.better.ncsnpp_more import UNetMore_DDPM # This lets the code run on CPU when 'unetmore' is not used
         return UNetMore_DDPM(config).to(config.device)#.to(memory_format=torch.channels_last).to(config.device)
     elif arch in ['unetmore3d', 'unetmorepseudo3d']:
@@ -253,9 +274,9 @@ class NCSNRunner():
         else:
             dataset, test_dataset = get_dataset(self.args.data_path, self.config, video_frames_pred=self.config.data.num_frames, start_at=self.args.start_at)
             dataloader = DataLoader(dataset, batch_size=self.config.training.batch_size, shuffle=True,
-                                    num_workers=self.config.data.num_workers)
+                                    num_workers=self.config.data.num_workers, collate_fn=train_collate_fn)
             test_loader = DataLoader(test_dataset, batch_size=self.config.training.batch_size, shuffle=True,
-                                     num_workers=self.config.data.num_workers, drop_last=True)
+                                     num_workers=self.config.data.num_workers, drop_last=True, collate_fn=train_collate_fn)
             test_iter = iter(test_loader)
 
         self.config.input_dim = self.config.data.image_size ** 2 * self.config.data.channels
@@ -370,7 +391,6 @@ class NCSNRunner():
         early_end = False
         for epoch in range(start_epoch, self.config.training.n_epochs):
             for batch, (X, y) in enumerate(dataloader):
-
                 optimizer.zero_grad()
                 lr = warmup_lr(optimizer, step, getattr(self.config.optim, 'warmup', 0), self.config.optim.lr)
                 scorenet.train()
@@ -379,10 +399,14 @@ class NCSNRunner():
                 # Data
                 X = X.to(self.config.device)
                 X = data_transform(self.config, X)
+
+
+
                 X, cond, cond_mask = conditioning_fn(self.config, X, num_frames_pred=self.config.data.num_frames,
                                                      prob_mask_cond=getattr(self.config.data, 'prob_mask_cond', 0.0),
                                                      prob_mask_future=getattr(self.config.data, 'prob_mask_future', 0.0),
                                                      conditional=conditional)
+                #pdb.set_trace()
 
                 # Loss
                 itr_start = time.time()
@@ -393,7 +417,7 @@ class NCSNRunner():
                                                    all_frames=getattr(self.config.model, 'output_all_frames', False))
                 # tb_logger.add_scalar('loss', loss, global_step=step)
                 # tb_hook()
-
+                #
                 # Optimize
                 loss.backward()
                 grad_norm = torch.nn.utils.clip_grad_norm_(scorenet.parameters(), getattr(self.config.optim, 'grad_clip', np.inf))
@@ -627,6 +651,7 @@ class NCSNRunner():
                         gif_frames = []
                         for t in range(condi.shape[1]//self.config.data.channels):
                             cond_t = condi[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
+                            cond_t = cond_t[:,3:4, :,:]
                             frame = torch.cat([cond_t, 0.5*torch.ones(*cond_t.shape[:-1], 2), cond_t], dim=-1)
                             frame = frame.permute(0, 2, 3, 1).numpy()
                             frame = np.stack([putText(f.copy(), f"{t+1:2d}p", (4, 15), 0, 0.5, (1,1,1), 1) for f in frame])
@@ -639,6 +664,9 @@ class NCSNRunner():
                         for t in range(pred.shape[1]//self.config.data.channels):
                             real_t = reali[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
                             pred_t = pred[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
+
+                            pred_t = pred_t[:,3:4, :,:]
+                            real_t = real_t[:,3:4, :,:]
                             frame = torch.cat([real_t, 0.5*torch.ones(*pred_t.shape[:-1], 2), pred_t], dim=-1)
                             frame = frame.permute(0, 2, 3, 1).numpy()   # BHWC
                             frame = np.stack([putText(f.copy(), f"{t+1:02d}", (4, 15), 0, 0.5, (1,1,1), 1) for f in frame])
@@ -666,14 +694,19 @@ class NCSNRunner():
                         del gif_frames
 
                         # Stretch out multiple frames horizontally
+                        #
+                        pred = pred[:,3::8,:,:]
+                        reali = reali[:,3::8,:,:]
+                        condi = condi[:,3::8,:,:]
+
                         pred = stretch_image(pred, self.config.data.channels, self.config.data.image_size)
                         reali = stretch_image(reali, self.config.data.channels, self.config.data.image_size)
                         condi = stretch_image(condi, self.config.data.channels, self.config.data.image_size)
                         if future > 0:
                             futri = stretch_image(futri, self.config.data.channels, self.config.data.image_size)
 
-                        padding = 0.5 * torch.ones(len(reali), self.config.data.channels, self.config.data.image_size, 4)
-                        if self.config.data.channels == 1:
+                        padding = 0.5 * torch.ones(len(reali), 1, self.config.data.image_size, 4)
+                        if self.config.data.channels == 8:
                             data = torch.cat([condi, padding, reali, padding, pred], dim=-1)
                             if future > 0:
                                 data = torch.cat([data, padding, futri], dim=-1)
@@ -1390,9 +1423,16 @@ class NCSNRunner():
 
         # Collate fn for n repeats
         def my_collate(batch):
-            data, _ = zip(*batch)
-            data = torch.stack(data).repeat_interleave(preds_per_test, dim=0)
-            return data, torch.zeros(len(data))
+            dynamic_input_batch, target = zip(*batch)
+            dynamic_input_batch, target_batch = zip(*batch)
+            dynamic_input_batch = np.stack(dynamic_input_batch, axis=0)
+            target_batch = np.stack(target_batch, axis=0)
+            dynamic_input_batch = np.moveaxis(dynamic_input_batch, source=4, destination=2)
+            dynamic_input_batch = torch.from_numpy(dynamic_input_batch).float()
+            target_batch = np.moveaxis(target_batch, source=4, destination=2)
+            target_batch = torch.from_numpy(target_batch).float()
+
+            return dynamic_input_batch, torch.zeros(len(dynamic_input_batch))
 
         # Data
         if self.condp == 0.0 and self.futrf == 0:                           # (1) Prediction
@@ -1441,6 +1481,7 @@ class NCSNRunner():
 
             real_ = data_transform(self.config, real_)
 
+
             # (1) Conditional Video Predition/Interpolation : Calc MSE,etc. and FVD on fully cond model i.e. prob_mask_cond=0.0
             # This is prediction if future = 0, else this is interpolation
 
@@ -1456,7 +1497,7 @@ class NCSNRunner():
                 logging.info(f"INTERPOLATING {num_frames_pred} frames, using a {self.config.data.num_frames} frame model conditioned on {self.config.data.num_frames_cond} cond + {future} future frames, subsample={getattr(self.config.sampling, 'subsample', None)}, preds_per_test={preds_per_test}")
 
             real, cond, cond_mask = conditioning_fn(self.config, real_, num_frames_pred=num_frames_pred,
-                                                    prob_mask_cond=0.0, prob_mask_future=0.0, conditional=conditional)
+                                                    prob_mask_cond=0.0, prob_mask_future=0.0, conditional=conditional, flag=True)
             real = inverse_data_transform(self.config, real)
             cond_original = inverse_data_transform(self.config, cond.clone())
             cond = cond.to(self.config.device)
@@ -1568,6 +1609,12 @@ class NCSNRunner():
 
             pred = torch.cat(pred_samples, dim=1)[:, :self.config.data.channels*num_frames_pred]
             pred = inverse_data_transform(self.config, pred)
+
+
+            # TODO
+            #viz(pred[0, 3::8,:,:], "pred")
+            #viz(real[0, 3::8,:,:], "real")
+            #viz(cond[0, 3::8,:,:], "cond")
             # pred has length of multiple of n (because we repeat data sample n times)
             
             if real.shape[1] < pred.shape[1]: # We cannot calculate MSE, PSNR, SSIM
@@ -1587,16 +1634,16 @@ class NCSNRunner():
                         real_ij = real[ii, (self.config.data.channels*jj):(self.config.data.channels*jj + self.config.data.channels), :, :]
                         mse += F.mse_loss(real_ij, pred_ij)
 
-                        pred_ij_pil = Transforms.ToPILImage()(pred_ij).convert("RGB")
-                        real_ij_pil = Transforms.ToPILImage()(real_ij).convert("RGB")
+                        pred_ij_pil = Transforms.ToPILImage()(pred_ij[3]).convert("RGB")
+                        real_ij_pil = Transforms.ToPILImage()(real_ij[3]).convert("RGB")
 
                         # SSIM
                         pred_ij_np_grey = np.asarray(pred_ij_pil.convert('L'))
                         real_ij_np_grey = np.asarray(real_ij_pil.convert('L'))
                         if self.config.data.dataset.upper() == "STOCHASTICMOVINGMNIST" or self.config.data.dataset.upper() == "MOVINGMNIST":
                             # ssim is the only metric extremely sensitive to gray being compared to b/w 
-                            pred_ij_np_grey = np.asarray(Transforms.ToPILImage()(torch.round(pred_ij)).convert("RGB").convert('L'))
-                            real_ij_np_grey = np.asarray(Transforms.ToPILImage()(torch.round(real_ij)).convert("RGB").convert('L'))
+                            pred_ij_np_grey = np.asarray(Transforms.ToPILImage()(torch.round(pred_ij[3])).convert("RGB").convert('L'))
+                            real_ij_np_grey = np.asarray(Transforms.ToPILImage()(torch.round(real_ij[3])).convert("RGB").convert('L'))
                         avg_ssim += ssim(pred_ij_np_grey, real_ij_np_grey, data_range=255, gaussian_weights=True, use_sample_covariance=False)
 
                         # Calculate LPIPS
@@ -2000,6 +2047,7 @@ class NCSNRunner():
                 # cond : # we show conditional frames, and real&pred side-by-side
                 for t in range(cond.shape[1]//self.config.data.channels):
                     cond_t = cond[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
+                    cond_t = cond_t[:,3:4,:,:]
                     frame = torch.cat([cond_t, 0.5*torch.ones(*cond_t.shape[:-1], 2), cond_t], dim=-1)
                     frame = frame.permute(0, 2, 3, 1).numpy()
                     frame = np.stack([putText(f.copy(), f"{t+1:2d}p", (4, 15), 0, 0.5, (1,1,1), 1) for f in frame])
@@ -2014,6 +2062,8 @@ class NCSNRunner():
                 for t in range(pred.shape[1]//self.config.data.channels):
                     real_t = real[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
                     pred_t = pred[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
+                    real_t = real_t[:,3:4,:,:]
+                    pred_t = pred_t[:,3:4,:,:]
                     frame = torch.cat([real_t, 0.5*torch.ones(*pred_t.shape[:-1], 2), pred_t], dim=-1)
                     frame = frame.permute(0, 2, 3, 1).numpy()
                     frame = np.stack([putText(f.copy(), f"{t+1:02d}", (4, 15), 0, 0.5, (1,1,1), 1) for f in frame])
@@ -2029,6 +2079,8 @@ class NCSNRunner():
                     for t in range(pred2.shape[1]//self.config.data.channels):
                         real_t = real2[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
                         pred_t = pred2[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
+                        real_t = real_t[:,3:4,:,:]
+                        pred_t = pred_t[:,3:4,:,:]
                         frame = torch.cat([real_t, 0.5*torch.ones(*pred_t.shape[:-1], 2), pred_t], dim=-1)
                         frame = frame.permute(0, 2, 3, 1).numpy()
                         frame = np.stack([putText(f.copy(), f"{t+1:02d}", (4, 15), 0, 0.5, (1,1,1), 1) for f in frame])
@@ -2043,6 +2095,7 @@ class NCSNRunner():
                 if pred_uncond is not None:
                     for t in range(pred_uncond.shape[1]//self.config.data.channels):
                         frame = pred_uncond[:, t*self.config.data.channels:(t+1)*self.config.data.channels]     # BCHW
+                        frame = frame[:,3:4,:,:]
                         frame = frame.permute(0, 2, 3, 1).numpy()
                         frame = np.stack([putText(f.copy(), f"{t+1:02d}", (4, 15), 0, 0.5, (1,1,1), 1) for f in frame])
                         nrow = ceil(np.sqrt(2*pred_uncond.shape[0])/2)
@@ -2166,6 +2219,8 @@ class NCSNRunner():
                     else:
                         save_image(image_grid, os.path.join(self.args.video_folder, f"videos_stretch_gen_{ckpt}_{i}.png"))
 
+                pred = pred[:,3::8,:,:]
+                real = real[:,3::8,:,:]
                 if self.condp == 0.0 and self.futrf == 0:                           # (1) Prediction
                     save_pred(pred, real)
 

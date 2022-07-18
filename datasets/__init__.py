@@ -14,10 +14,13 @@ from datasets.bair import BAIRDataset
 from datasets.kth import KTHDataset
 from datasets.cityscapes import CityscapesDataset
 from datasets.ucf101 import UCF101Dataset
+from datasets.t4c import T4CDataset
 from torch.utils.data import Subset
 
+import pdb
 
-DATASETS = ['CIFAR10', 'CELEBA', 'LSUN', 'FFHQ', 'IMAGENET', 'MOVINGMNIST', 'STOCHASTICMOVINGMNIST', 'BAIR', 'KTH', 'CITYSCAPES', 'UCF101']
+
+DATASETS = ['T4C', 'CIFAR10', 'CELEBA', 'LSUN', 'FFHQ', 'IMAGENET', 'MOVINGMNIST', 'STOCHASTICMOVINGMNIST', 'BAIR', 'KTH', 'CITYSCAPES', 'UCF101']
 
 
 def get_dataloaders(data_path, config):
@@ -213,6 +216,10 @@ def get_dataset(data_path, config, video_frames_pred=0, start_at=0):
                                 random_horizontal_flip=config.data.random_flip)
         test_dataset = UCF101Dataset(data_path, frames_per_sample=frames_per_sample, image_size=config.data.image_size, train=False, random_time=True,
                                      random_horizontal_flip=False, total_videos=256)
+    elif config.data.dataset.upper() == "T4C":
+        dataset = T4CDataset(data_path, im_size=config.data.image_size)
+        test_dataset = T4CDataset(data_path, im_size=config.data.image_size,
+                                  file_filter = "**/validation/*8ch.h5")
 
     subset_num = getattr(config.data, "subset", -1)
     if subset_num > 0:

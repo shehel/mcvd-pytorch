@@ -17,6 +17,8 @@ import yaml
 
 from runners import *
 
+from clearml import Task
+
 def parse_args_and_config():
     parser = argparse.ArgumentParser(description=globals()['__doc__'])
 
@@ -368,6 +370,9 @@ def dict2namespace(config):
 
 
 def main():
+
+    task = Task.init(project_name='t4c_gen', task_name='train_mcvd')
+
     args, config, config_uncond = parse_args_and_config()
     logging.info("{}".format(args))
     logging.info("Writing log file to {}".format(args.log_path))

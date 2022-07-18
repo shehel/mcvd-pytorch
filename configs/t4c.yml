@@ -3,10 +3,10 @@ training:
   batch_size: 1
   n_epochs: 1000000
   n_iters: 3000001
-  snapshot_freq: 100
+  snapshot_freq: 25000
   snapshot_sampling: true
-  sample_freq: 100
-  val_freq: 100
+  sample_freq: 10000
+  val_freq: 1000
   log_freq: 100
   log_all_sigmas: false
 
@@ -16,7 +16,7 @@ sampling:
   ckpt_id: 0
   final_only: true
   fid: false
-  ssim: true
+  ssim: false
   fvd: false
   denoise: true
   subsample: 100
@@ -80,7 +80,7 @@ model:
   sigma_dist: linear
   sigma_begin: 0.02
   sigma_end: 0.0001
-  num_classes: 1000
+  num_classes: 100
   ema: true
   ema_rate: 0.999
   spec_norm: false
